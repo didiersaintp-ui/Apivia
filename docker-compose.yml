@@ -1,0 +1,342 @@
+version: '3.8'
+
+services:
+  # ============================================
+  # INFRASTRUCTURE
+  # ============================================
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: apivia-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-apivia}
+      POSTGRES_USER: ${POSTGRES_USER:-apivia}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-YourStrongPassword123!}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - apivia-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U apivia"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: apivia-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-apivia}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-YourStrongPassword123!}
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    networks:
+      - apivia-network
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: apivia-redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - apivia-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    container_name: apivia-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-apivia}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-YourStrongPassword123!}
+    volumes:
+      - minio-data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    networks:
+      - apivia-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  seq:
+    image: datalust/seq:latest
+    container_name: apivia-seq
+    environment:
+      ACCEPT_EULA: Y
+    volumes:
+      - seq-data:/data
+    ports:
+      - "5341:80"
+    networks:
+      - apivia-network
+
+  # ============================================
+  # BACKEND SERVICES
+  # ============================================
+
+  gateway:
+    build:
+      context: ./src/Gateway
+      dockerfile: Dockerfile
+    container_name: apivia-gateway
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Development}
+      - ASPNETCORE_URLS=http://+:8080
+      - ConnectionStrings__DefaultConnection=${DATABASE_URL}
+      - RabbitMQ__Host=${RABBITMQ_HOST:-rabbitmq}
+      - Redis__Configuration=${REDIS_HOST:-redis}:6379
+      - Jwt__Secret=${JWT_SECRET}
+      - Jwt__Issuer=${JWT_ISSUER:-apivia}
+      - Jwt__Audience=${JWT_AUDIENCE:-apivia}
+      - Seq__Url=${SEQ_URL:-http://seq:80}
+    ports:
+      - "5000:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - apivia-network
+
+  auth-service:
+    build:
+      context: ./src/Services/Auth
+      dockerfile: Dockerfile
+    container_name: apivia-auth
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Development}
+      - ASPNETCORE_URLS=http://+:8080
+      - ConnectionStrings__DefaultConnection=${DATABASE_URL}
+      - Jwt__Secret=${JWT_SECRET}
+      - Jwt__Issuer=${JWT_ISSUER:-apivia}
+      - Jwt__Audience=${JWT_AUDIENCE:-apivia}
+      - Seq__Url=${SEQ_URL:-http://seq:80}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - apivia-network
+
+  api-design-service:
+    build:
+      context: ./src/Services/ApiDesign
+      dockerfile: Dockerfile
+    container_name: apivia-api-design
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Development}
+      - ASPNETCORE_URLS=http://+:8080
+      - ConnectionStrings__DefaultConnection=${DATABASE_URL}
+      - RabbitMQ__Host=${RABBITMQ_HOST:-rabbitmq}
+      - Redis__Configuration=${REDIS_HOST:-redis}:6379
+      - Seq__Url=${SEQ_URL:-http://seq:80}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - apivia-network
+
+  data-dictionary-service:
+    build:
+      context: ./src/Services/DataDictionary
+      dockerfile: Dockerfile
+    container_name: apivia-data-dictionary
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Development}
+      - ASPNETCORE_URLS=http://+:8080
+      - ConnectionStrings__DefaultConnection=${DATABASE_URL}
+      - RabbitMQ__Host=${RABBITMQ_HOST:-rabbitmq}
+      - Redis__Configuration=${REDIS_HOST:-redis}:6379
+      - Seq__Url=${SEQ_URL:-http://seq:80}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - apivia-network
+
+  governance-service:
+    build:
+      context: ./src/Services/Governance
+      dockerfile: Dockerfile
+    container_name: apivia-governance
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Development}
+      - ASPNETCORE_URLS=http://+:8080
+      - ConnectionStrings__DefaultConnection=${DATABASE_URL}
+      - RabbitMQ__Host=${RABBITMQ_HOST:-rabbitmq}
+      - Redis__Configuration=${REDIS_HOST:-redis}:6379
+      - Seq__Url=${SEQ_URL:-http://seq:80}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - apivia-network
+
+  mock-server-service:
+    build:
+      context: ./src/Services/MockServer
+      dockerfile: Dockerfile
+    container_name: apivia-mock-server
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Development}
+      - ASPNETCORE_URLS=http://+:8080
+      - ConnectionStrings__DefaultConnection=${DATABASE_URL}
+      - Seq__Url=${SEQ_URL:-http://seq:80}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - apivia-network
+
+  linting-service:
+    build:
+      context: ./src/Services/Linting
+      dockerfile: Dockerfile
+    container_name: apivia-linting
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Development}
+      - ASPNETCORE_URLS=http://+:8080
+      - ConnectionStrings__DefaultConnection=${DATABASE_URL}
+      - Seq__Url=${SEQ_URL:-http://seq:80}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - apivia-network
+
+  documentation-service:
+    build:
+      context: ./src/Services/Documentation
+      dockerfile: Dockerfile
+    container_name: apivia-documentation
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Development}
+      - ASPNETCORE_URLS=http://+:8080
+      - ConnectionStrings__DefaultConnection=${DATABASE_URL}
+      - MinIO__Endpoint=${MINIO_ENDPOINT:-minio:9000}
+      - MinIO__AccessKey=${MINIO_ROOT_USER:-apivia}
+      - MinIO__SecretKey=${MINIO_ROOT_PASSWORD}
+      - Seq__Url=${SEQ_URL:-http://seq:80}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      - apivia-network
+
+  collaboration-service:
+    build:
+      context: ./src/Services/Collaboration
+      dockerfile: Dockerfile
+    container_name: apivia-collaboration
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Development}
+      - ASPNETCORE_URLS=http://+:8080
+      - ConnectionStrings__DefaultConnection=${DATABASE_URL}
+      - RabbitMQ__Host=${RABBITMQ_HOST:-rabbitmq}
+      - Redis__Configuration=${REDIS_HOST:-redis}:6379
+      - Seq__Url=${SEQ_URL:-http://seq:80}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - apivia-network
+
+  git-integration-service:
+    build:
+      context: ./src/Services/GitIntegration
+      dockerfile: Dockerfile
+    container_name: apivia-git-integration
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Development}
+      - ASPNETCORE_URLS=http://+:8080
+      - ConnectionStrings__DefaultConnection=${DATABASE_URL}
+      - Seq__Url=${SEQ_URL:-http://seq:80}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - apivia-network
+
+  # ============================================
+  # FRONTEND
+  # ============================================
+
+  frontend:
+    build:
+      context: ./src/Frontend
+      dockerfile: Dockerfile
+    container_name: apivia-frontend
+    environment:
+      - NODE_ENV=${NODE_ENV:-development}
+      - VITE_API_URL=http://localhost:5000
+    ports:
+      - "3000:80"
+    depends_on:
+      - gateway
+    networks:
+      - apivia-network
+
+# ============================================
+# NETWORKS
+# ============================================
+
+networks:
+  apivia-network:
+    driver: bridge
+
+# ============================================
+# VOLUMES
+# ============================================
+
+volumes:
+  postgres-data:
+    driver: local
+  rabbitmq-data:
+    driver: local
+  redis-data:
+    driver: local
+  minio-data:
+    driver: local
+  seq-data:
+    driver: local

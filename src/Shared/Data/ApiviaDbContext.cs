@@ -30,6 +30,7 @@ public class ApiviaDbContext : IdentityDbContext<User, IdentityRole<Guid>, Guid>
     public DbSet<Proposal> Proposals => Set<Proposal>();
     public DbSet<MockServer> MockServers => Set<MockServer>();
     public DbSet<LintResult> LintResults => Set<LintResult>();
+    public DbSet<Ruleset> Rulesets => Set<Ruleset>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)

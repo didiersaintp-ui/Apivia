@@ -239,64 +239,69 @@ services:
     networks:
       - apivia-network
 
-  documentation-service:
-    build:
-      context: ./src/Services/Documentation
-      dockerfile: Dockerfile
-    container_name: apivia-documentation
-    environment:
-      - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Development}
-      - ASPNETCORE_URLS=http://+:8080
-      - ConnectionStrings__DefaultConnection=${DATABASE_URL}
-      - MinIO__Endpoint=${MINIO_ENDPOINT:-minio:9000}
-      - MinIO__AccessKey=${MINIO_ROOT_USER:-apivia}
-      - MinIO__SecretKey=${MINIO_ROOT_PASSWORD}
-      - Seq__Url=${SEQ_URL:-http://seq:80}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-    networks:
-      - apivia-network
+  # ============================================
+  # FUTURE SERVICES (Not implemented in Phase 1-3)
+  # Uncomment when implemented in future phases
+  # ============================================
 
-  collaboration-service:
-    build:
-      context: ./src/Services/Collaboration
-      dockerfile: Dockerfile
-    container_name: apivia-collaboration
-    environment:
-      - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Development}
-      - ASPNETCORE_URLS=http://+:8080
-      - ConnectionStrings__DefaultConnection=${DATABASE_URL}
-      - RabbitMQ__Host=${RABBITMQ_HOST:-rabbitmq}
-      - Redis__Configuration=${REDIS_HOST:-redis}:6379
-      - Seq__Url=${SEQ_URL:-http://seq:80}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    networks:
-      - apivia-network
+  # documentation-service:
+  #   build:
+  #     context: ./src/Services/Documentation
+  #     dockerfile: Dockerfile
+  #   container_name: apivia-documentation
+  #   environment:
+  #     - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Development}
+  #     - ASPNETCORE_URLS=http://+:8080
+  #     - ConnectionStrings__DefaultConnection=${DATABASE_URL}
+  #     - MinIO__Endpoint=${MINIO_ENDPOINT:-minio:9000}
+  #     - MinIO__AccessKey=${MINIO_ROOT_USER:-apivia}
+  #     - MinIO__SecretKey=${MINIO_ROOT_PASSWORD}
+  #     - Seq__Url=${SEQ_URL:-http://seq:80}
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #     minio:
+  #       condition: service_healthy
+  #   networks:
+  #     - apivia-network
 
-  git-integration-service:
-    build:
-      context: ./src/Services/GitIntegration
-      dockerfile: Dockerfile
-    container_name: apivia-git-integration
-    environment:
-      - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Development}
-      - ASPNETCORE_URLS=http://+:8080
-      - ConnectionStrings__DefaultConnection=${DATABASE_URL}
-      - Seq__Url=${SEQ_URL:-http://seq:80}
-    depends_on:
-      postgres:
-        condition: service_healthy
-    networks:
-      - apivia-network
+  # collaboration-service:
+  #   build:
+  #     context: ./src/Services/Collaboration
+  #     dockerfile: Dockerfile
+  #   container_name: apivia-collaboration
+  #   environment:
+  #     - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Development}
+  #     - ASPNETCORE_URLS=http://+:8080
+  #     - ConnectionStrings__DefaultConnection=${DATABASE_URL}
+  #     - RabbitMQ__Host=${RABBITMQ_HOST:-rabbitmq}
+  #     - Redis__Configuration=${REDIS_HOST:-redis}:6379
+  #     - Seq__Url=${SEQ_URL:-http://seq:80}
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #     rabbitmq:
+  #       condition: service_healthy
+  #     redis:
+  #       condition: service_healthy
+  #   networks:
+  #     - apivia-network
+
+  # git-integration-service:
+  #   build:
+  #     context: ./src/Services/GitIntegration
+  #     dockerfile: Dockerfile
+  #   container_name: apivia-git-integration
+  #   environment:
+  #     - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Development}
+  #     - ASPNETCORE_URLS=http://+:8080
+  #     - ConnectionStrings__DefaultConnection=${DATABASE_URL}
+  #     - Seq__Url=${SEQ_URL:-http://seq:80}
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #   networks:
+  #     - apivia-network
 
   # ============================================
   # FRONTEND

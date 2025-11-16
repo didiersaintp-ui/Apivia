@@ -1,30 +1,84 @@
-import { useState } from 'react'
+import { useEffect } from 'react';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { useAuthStore } from './stores/authStore';
 
-function App() {
-  const [count, setCount] = useState(0)
+// Pages
+import LoginPage from './pages/LoginPage';
+import RegisterPage from './pages/RegisterPage';
+import WorkspacesPage from './pages/WorkspacesPage';
+import ProjectsPage from './pages/ProjectsPage';
+import ApiSpecsPage from './pages/ApiSpecsPage';
 
-  return (
-    <div className="min-h-screen bg-background flex items-center justify-center">
-      <div className="text-center">
-        <h1 className="text-4xl font-bold mb-4">Apivia</h1>
-        <p className="text-xl text-muted-foreground mb-8">
-          API First Design Platform
-        </p>
-        <button
-          onClick={() => setCount((count) => count + 1)}
-          className="px-6 py-3 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
-        >
-          Count is {count}
-        </button>
-        <p className="mt-8 text-sm text-muted-foreground">
-          Phase 0: Infrastructure Setup Complete ✅
-        </p>
-        <p className="mt-2 text-sm text-muted-foreground">
-          Ready for Phase 1: Core Backend Services
-        </p>
-      </div>
-    </div>
-  )
+// Create query client
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: 1,
+      refetchOnWindowFocus: false,
+    },
+  },
+});
+
+// Protected Route component
+function ProtectedRoute({ children }: { children: React.ReactNode }) {
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+
+  if (!isAuthenticated) {
+    return <Navigate to="/login" replace />;
+  }
+
+  return <>{children}</>;
 }
 
-export default App
+function App() {
+  const initializeAuth = useAuthStore((state) => state.initializeAuth);
+
+  useEffect(() => {
+    initializeAuth();
+  }, [initializeAuth]);
+
+  return (
+    <QueryClientProvider client={queryClient}>
+      <BrowserRouter>
+        <Routes>
+          {/* Public routes */}
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/register" element={<RegisterPage />} />
+
+          {/* Protected routes */}
+          <Route
+            path="/workspaces"
+            element={
+              <ProtectedRoute>
+                <WorkspacesPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/projects"
+            element={
+              <ProtectedRoute>
+                <ProjectsPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/specs"
+            element={
+              <ProtectedRoute>
+                <ApiSpecsPage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Default redirect */}
+          <Route path="/" element={<Navigate to="/workspaces" replace />} />
+          <Route path="*" element={<Navigate to="/workspaces" replace />} />
+        </Routes>
+      </BrowserRouter>
+    </QueryClientProvider>
+  );
+}
+
+export default App;

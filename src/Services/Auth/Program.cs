@@ -127,7 +127,7 @@ builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy =>
     {
-        var origins = builder.Configuration.GetSection("Cors:Origins").Get<string[]>() ?? new[] { "http://localhost:3000" };
+        var origins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? new[] { "http://localhost:3000" };
         policy.WithOrigins(origins)
               .AllowAnyMethod()
               .AllowAnyHeader()
@@ -161,14 +161,20 @@ app.MapGet("/health", () => Results.Ok(new {
 
 app.MapControllers();
 
-// Ensure database is created (for development)
-if (app.Environment.IsDevelopment())
+// Run database migrations
+using (var scope = app.Services.CreateScope())
 {
-    using var scope = app.Services.CreateScope();
     var context = scope.ServiceProvider.GetRequiredService<ApiviaDbContext>();
-    await context.Database.EnsureCreatedAsync();
-
-    Log.Information("Auth Service database ensured");
+    try
+    {
+        await context.Database.MigrateAsync();
+        Log.Information("Auth Service database migrations applied successfully");
+    }
+    catch (Exception ex)
+    {
+        Log.Error(ex, "Error applying database migrations for Auth Service");
+        throw;
+    }
 }
 
 Log.Information("Auth Service starting...");

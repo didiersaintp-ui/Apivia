@@ -17,6 +17,8 @@ public interface IAuthService
     Task<LoginResponse> LoginAsync(LoginRequest request, CancellationToken cancellationToken = default);
     Task<RefreshTokenResponse> RefreshTokenAsync(RefreshTokenRequest request, CancellationToken cancellationToken = default);
     Task<bool> ChangePasswordAsync(Guid userId, ChangePasswordRequest request, CancellationToken cancellationToken = default);
+    Task<EmailConfirmationTokenResponse> GenerateEmailConfirmationTokenAsync(Guid userId, CancellationToken cancellationToken = default);
+    Task<ConfirmEmailResponse> ConfirmEmailAsync(ConfirmEmailRequest request, CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -62,7 +64,7 @@ public class AuthService : IAuthService
             Email = request.Email,
             UserName = request.Email,
             FullName = request.FullName,
-            EmailConfirmed = true, // Auto-confirm for now (in production, send confirmation email)
+            EmailConfirmed = false, // Email confirmation required for security
             CreatedAt = DateTime.UtcNow,
             ModifiedAt = DateTime.UtcNow,
             IsActive = true
@@ -259,6 +261,75 @@ public class AuthService : IAuthService
         _logger.LogInformation("Password changed successfully for user {UserId}", userId);
 
         return true;
+    }
+
+    /// <summary>
+    /// Generate email confirmation token for a user
+    /// </summary>
+    public async Task<EmailConfirmationTokenResponse> GenerateEmailConfirmationTokenAsync(Guid userId, CancellationToken cancellationToken = default)
+    {
+        var user = await _userManager.FindByIdAsync(userId.ToString());
+        if (user == null)
+        {
+            throw new InvalidOperationException("User not found");
+        }
+
+        if (user.EmailConfirmed)
+        {
+            throw new InvalidOperationException("Email is already confirmed");
+        }
+
+        // Generate email confirmation token using UserManager
+        var token = await _userManager.GenerateEmailConfirmationTokenAsync(user);
+
+        // In production, send this token via email
+        _logger.LogInformation("Email confirmation token generated for user {UserId}. Token: {Token}", userId, token);
+
+        return new EmailConfirmationTokenResponse
+        {
+            UserId = userId,
+            Token = token,
+            Message = "Email confirmation token generated. In production, this would be sent via email."
+        };
+    }
+
+    /// <summary>
+    /// Confirm user email with token
+    /// </summary>
+    public async Task<ConfirmEmailResponse> ConfirmEmailAsync(ConfirmEmailRequest request, CancellationToken cancellationToken = default)
+    {
+        var user = await _userManager.FindByIdAsync(request.UserId.ToString());
+        if (user == null)
+        {
+            throw new InvalidOperationException("User not found");
+        }
+
+        if (user.EmailConfirmed)
+        {
+            return new ConfirmEmailResponse
+            {
+                Success = true,
+                Message = "Email is already confirmed"
+            };
+        }
+
+        // Confirm email using UserManager
+        var result = await _userManager.ConfirmEmailAsync(user, request.Token);
+
+        if (!result.Succeeded)
+        {
+            var errors = string.Join(", ", result.Errors.Select(e => e.Description));
+            _logger.LogWarning("Email confirmation failed for user {UserId}: {Errors}", request.UserId, errors);
+            throw new InvalidOperationException($"Email confirmation failed: {errors}");
+        }
+
+        _logger.LogInformation("Email confirmed successfully for user {UserId}", request.UserId);
+
+        return new ConfirmEmailResponse
+        {
+            Success = true,
+            Message = "Email confirmed successfully"
+        };
     }
 }
 

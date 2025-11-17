@@ -26,6 +26,17 @@ var connectionString = builder.Configuration.GetConnectionString("DefaultConnect
 builder.Services.AddDbContext<ApiviaDbContext>(options =>
     options.UseNpgsql(connectionString));
 
+// Add Redis Distributed Cache
+var redisConnection = builder.Configuration["Redis:Configuration"]
+    ?? builder.Configuration.GetConnectionString("Redis")
+    ?? "localhost:6379";
+
+builder.Services.AddStackExchangeRedisCache(options =>
+{
+    options.Configuration = redisConnection;
+    options.InstanceName = "ApiDesign_";
+});
+
 // Add JWT Authentication
 var jwtSecret = builder.Configuration["Jwt:Secret"]
     ?? throw new InvalidOperationException("JWT Secret not configured");
@@ -129,6 +140,22 @@ app.MapGet("/health", () => Results.Ok(new
 })).AllowAnonymous();
 
 app.MapControllers();
+
+// Run database migrations
+using (var scope = app.Services.CreateScope())
+{
+    var context = scope.ServiceProvider.GetRequiredService<ApiviaDbContext>();
+    try
+    {
+        await context.Database.MigrateAsync();
+        Log.Information("API Design Service database migrations applied successfully");
+    }
+    catch (Exception ex)
+    {
+        Log.Error(ex, "Error applying database migrations for API Design Service");
+        throw;
+    }
+}
 
 try
 {

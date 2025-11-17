@@ -156,4 +156,54 @@ public class AuthController : ControllerBase
             claims = User.Claims.Select(c => new { c.Type, c.Value })
         });
     }
+
+    /// <summary>
+    /// Generate email confirmation token (for testing or resending confirmation)
+    /// </summary>
+    [HttpPost("generate-confirmation-token/{userId}")]
+    [ProducesResponseType(typeof(EmailConfirmationTokenResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<EmailConfirmationTokenResponse>> GenerateConfirmationToken(Guid userId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var response = await _authService.GenerateEmailConfirmationTokenAsync(userId, cancellationToken);
+            return Ok(response);
+        }
+        catch (InvalidOperationException ex)
+        {
+            _logger.LogWarning(ex, "Failed to generate confirmation token for user {UserId}", userId);
+            return BadRequest(new ProblemDetails
+            {
+                Title = "Token Generation Failed",
+                Detail = ex.Message,
+                Status = StatusCodes.Status400BadRequest
+            });
+        }
+    }
+
+    /// <summary>
+    /// Confirm email address with token
+    /// </summary>
+    [HttpPost("confirm-email")]
+    [ProducesResponseType(typeof(ConfirmEmailResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<ConfirmEmailResponse>> ConfirmEmail([FromBody] ConfirmEmailRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var response = await _authService.ConfirmEmailAsync(request, cancellationToken);
+            return Ok(response);
+        }
+        catch (InvalidOperationException ex)
+        {
+            _logger.LogWarning(ex, "Email confirmation failed for user {UserId}", request.UserId);
+            return BadRequest(new ProblemDetails
+            {
+                Title = "Email Confirmation Failed",
+                Detail = ex.Message,
+                Status = StatusCodes.Status400BadRequest
+            });
+        }
+    }
 }

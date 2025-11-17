@@ -51,6 +51,17 @@ builder.Services.AddAuthentication(options =>
 });
 
 builder.Services.AddAuthorization();
+\n// Add Redis Distributed Cache
+var redisConnection = builder.Configuration["Redis:Configuration"]
+    ?? builder.Configuration.GetConnectionString("Redis")
+    ?? "localhost:6379";
+
+builder.Services.AddStackExchangeRedisCache(options =>
+{
+    options.Configuration = redisConnection;
+    options.InstanceName = "Governance_";
+});
+
 
 // Add FluentValidation
 builder.Services.AddFluentValidationAutoValidation();
@@ -127,6 +138,22 @@ app.MapGet("/health", () => Results.Ok(new
 })).AllowAnonymous();
 
 app.MapControllers();
+
+// Run database migrations
+using (var scope = app.Services.CreateScope())
+{
+    var context = scope.ServiceProvider.GetRequiredService<ApiviaDbContext>();
+    try
+    {
+        await context.Database.MigrateAsync();
+        Log.Information("Governance Engine Service database migrations applied successfully");
+    }
+    catch (Exception ex)
+    {
+        Log.Error(ex, "Error applying database migrations for Governance Engine Service");
+        throw;
+    }
+}
 
 try
 {

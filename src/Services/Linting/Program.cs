@@ -121,6 +121,22 @@ app.MapGet("/health", () => Results.Ok(new
 
 app.MapControllers();
 
+// Run database migrations
+using (var scope = app.Services.CreateScope())
+{
+    var context = scope.ServiceProvider.GetRequiredService<ApiviaDbContext>();
+    try
+    {
+        await context.Database.MigrateAsync();
+        Log.Information("Linting Engine Service database migrations applied successfully");
+    }
+    catch (Exception ex)
+    {
+        Log.Error(ex, "Error applying database migrations for Linting Engine Service");
+        throw;
+    }
+}
+
 try
 {
     Log.Information("Starting Linting Engine Service");

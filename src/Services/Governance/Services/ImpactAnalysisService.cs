@@ -4,6 +4,7 @@ using Apivia.Shared.Data.Entities;
 using Apivia.Shared.Data.Enums;
 using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
+using Microsoft.Extensions.Caching.Distributed;
 
 namespace Apivia.Services.Governance.Services;
 
@@ -27,11 +28,13 @@ public class ImpactAnalysisService : IImpactAnalysisService
 {
     private readonly ApiviaDbContext _context;
     private readonly ILogger<ImpactAnalysisService> _logger;
+    private readonly IDistributedCache _cache;
 
-    public ImpactAnalysisService(ApiviaDbContext context, ILogger<ImpactAnalysisService> logger)
+    public ImpactAnalysisService(ApiviaDbContext context, ILogger<ImpactAnalysisService> logger, IDistributedCache cache)
     {
         _context = context;
         _logger = logger;
+        _cache = cache;
     }
 
     /// <summary>

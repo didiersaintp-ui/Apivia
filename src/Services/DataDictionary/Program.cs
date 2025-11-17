@@ -56,6 +56,17 @@ builder.Services.AddAuthorization();
 builder.Services.AddFluentValidationAutoValidation();
 builder.Services.AddValidatorsFromAssemblyContaining<Program>();
 
+// Add Redis Distributed Cache
+var redisConnection = builder.Configuration["Redis:Configuration"]
+    ?? builder.Configuration.GetConnectionString("Redis")
+    ?? "localhost:6379";
+
+builder.Services.AddStackExchangeRedisCache(options =>
+{
+    options.Configuration = redisConnection;
+    options.InstanceName = "DataDict_";
+});
+
 // Add application services
 builder.Services.AddScoped<IDataDictionaryService, DataDictionaryService>();
 builder.Services.AddScoped<IDataEntityService, DataEntityService>();
@@ -128,6 +139,22 @@ app.MapGet("/health", () => Results.Ok(new
 })).AllowAnonymous();
 
 app.MapControllers();
+
+// Run database migrations
+using (var scope = app.Services.CreateScope())
+{
+    var context = scope.ServiceProvider.GetRequiredService<ApiviaDbContext>();
+    try
+    {
+        await context.Database.MigrateAsync();
+        Log.Information("Data Dictionary Service database migrations applied successfully");
+    }
+    catch (Exception ex)
+    {
+        Log.Error(ex, "Error applying database migrations for Data Dictionary Service");
+        throw;
+    }
+}
 
 try
 {

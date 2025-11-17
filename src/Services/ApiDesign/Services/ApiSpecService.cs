@@ -3,6 +3,8 @@ using Apivia.Shared.Data;
 using Apivia.Shared.Data.Entities;
 using Apivia.Shared.Data.Enums;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Distributed;
+using System.Text.Json;
 
 namespace Apivia.Services.ApiDesign.Services;
 
@@ -28,15 +30,18 @@ public class ApiSpecService : IApiSpecService
     private readonly ApiviaDbContext _context;
     private readonly IValidationService _validationService;
     private readonly ILogger<ApiSpecService> _logger;
+    private readonly IDistributedCache _cache;
 
     public ApiSpecService(
         ApiviaDbContext context,
         IValidationService validationService,
-        ILogger<ApiSpecService> logger)
+        ILogger<ApiSpecService> logger,
+        IDistributedCache cache)
     {
         _context = context;
         _validationService = validationService;
         _logger = logger;
+        _cache = cache;
     }
 
     /// <summary>
@@ -101,6 +106,29 @@ public class ApiSpecService : IApiSpecService
     /// </summary>
     public async Task<ApiSpecResponse> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
     {
+        // Try to get from cache first
+        var cacheKey = $"apispec:{id}";
+        var cachedData = await _cache.GetStringAsync(cacheKey, cancellationToken);
+
+        if (!string.IsNullOrEmpty(cachedData))
+        {
+            try
+            {
+                var cachedSpec = JsonSerializer.Deserialize<ApiSpecResponse>(cachedData);
+                if (cachedSpec != null)
+                {
+                    _logger.LogDebug("API Spec {ApiSpecId} retrieved from cache", id);
+                    return cachedSpec;
+                }
+            }
+            catch (JsonException ex)
+            {
+                _logger.LogWarning(ex, "Failed to deserialize cached API Spec {ApiSpecId}, fetching from database", id);
+                // Continue to fetch from database
+            }
+        }
+
+        // Fetch from database
         var apiSpec = await _context.ApiSpecs
             .Include(a => a.Project)
             .Include(a => a.Creator)
@@ -131,6 +159,27 @@ public class ApiSpecService : IApiSpecService
         if (apiSpec == null)
         {
             throw new KeyNotFoundException($"API Spec with ID {id} not found");
+        }
+
+        // Cache the result for 15 minutes
+        var cacheOptions = new DistributedCacheEntryOptions
+        {
+            AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(15)
+        };
+
+        try
+        {
+            await _cache.SetStringAsync(
+                cacheKey,
+                JsonSerializer.Serialize(apiSpec),
+                cacheOptions,
+                cancellationToken);
+            _logger.LogDebug("API Spec {ApiSpecId} cached for 15 minutes", id);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to cache API Spec {ApiSpecId}", id);
+            // Don't throw - caching is not critical
         }
 
         return apiSpec;
@@ -267,6 +316,9 @@ public class ApiSpecService : IApiSpecService
 
         await _context.SaveChangesAsync(cancellationToken);
 
+        // Invalidate cache
+        await InvalidateCacheAsync(id, cancellationToken);
+
         _logger.LogInformation("API Spec {ApiSpecId} updated by user {UserId}", apiSpec.Id, userId);
 
         return await GetByIdAsync(apiSpec.Id, cancellationToken);
@@ -296,6 +348,9 @@ public class ApiSpecService : IApiSpecService
         apiSpec.ModifiedAt = DateTime.UtcNow;
 
         await _context.SaveChangesAsync(cancellationToken);
+
+        // Invalidate cache
+        await InvalidateCacheAsync(id, cancellationToken);
 
         _logger.LogInformation("API Spec {ApiSpecId} soft deleted", apiSpec.Id);
 
@@ -342,6 +397,9 @@ public class ApiSpecService : IApiSpecService
 
         await _context.SaveChangesAsync(cancellationToken);
 
+        // Invalidate cache
+        await InvalidateCacheAsync(id, cancellationToken);
+
         _logger.LogInformation("API Spec {ApiSpecId} published by user {UserId}", apiSpec.Id, userId);
 
         return await GetByIdAsync(apiSpec.Id, cancellationToken);
@@ -386,5 +444,23 @@ public class ApiSpecService : IApiSpecService
             request.NewVersion, id, userId);
 
         return await GetByIdAsync(newSpec.Id, cancellationToken);
+    }
+
+    /// <summary>
+    /// Invalidate cache for an API specification
+    /// </summary>
+    private async Task InvalidateCacheAsync(Guid id, CancellationToken cancellationToken)
+    {
+        var cacheKey = $"apispec:{id}";
+        try
+        {
+            await _cache.RemoveAsync(cacheKey, cancellationToken);
+            _logger.LogDebug("Cache invalidated for API Spec {ApiSpecId}", id);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to invalidate cache for API Spec {ApiSpecId}", id);
+            // Don't throw - cache invalidation failure is not critical
+        }
     }
 }

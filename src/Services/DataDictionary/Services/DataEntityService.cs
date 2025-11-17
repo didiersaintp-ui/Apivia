@@ -2,6 +2,8 @@ using Apivia.Services.DataDictionary.DTOs;
 using Apivia.Shared.Data;
 using Apivia.Shared.Data.Entities;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Distributed;
+using System.Text.Json;
 
 namespace Apivia.Services.DataDictionary.Services;
 
@@ -24,11 +26,13 @@ public class DataEntityService : IDataEntityService
 {
     private readonly ApiviaDbContext _context;
     private readonly ILogger<DataEntityService> _logger;
+    private readonly IDistributedCache _cache;
 
-    public DataEntityService(ApiviaDbContext context, ILogger<DataEntityService> logger)
+    public DataEntityService(ApiviaDbContext context, ILogger<DataEntityService> logger, IDistributedCache cache)
     {
         _context = context;
         _logger = logger;
+        _cache = cache;
     }
 
     /// <summary>
@@ -89,6 +93,28 @@ public class DataEntityService : IDataEntityService
     /// </summary>
     public async Task<DataEntityResponse> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
     {
+        // Try to get from cache first
+        var cacheKey = $"dataentity:{id}";
+        var cachedData = await _cache.GetStringAsync(cacheKey, cancellationToken);
+
+        if (!string.IsNullOrEmpty(cachedData))
+        {
+            try
+            {
+                var cachedEntity = JsonSerializer.Deserialize<DataEntityResponse>(cachedData);
+                if (cachedEntity != null)
+                {
+                    _logger.LogDebug("Data Entity {EntityId} retrieved from cache", id);
+                    return cachedEntity;
+                }
+            }
+            catch (JsonException ex)
+            {
+                _logger.LogWarning(ex, "Failed to deserialize cached Data Entity {EntityId}", id);
+            }
+        }
+
+        // Fetch from database
         var entity = await _context.DataEntities
             .Include(e => e.Dictionary)
             .Include(e => e.Creator)
@@ -118,6 +144,21 @@ public class DataEntityService : IDataEntityService
         if (entity == null)
         {
             throw new KeyNotFoundException($"Data Entity with ID {id} not found");
+        }
+
+        // Cache the result for 15 minutes
+        try
+        {
+            await _cache.SetStringAsync(
+                cacheKey,
+                JsonSerializer.Serialize(entity),
+                new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(15) },
+                cancellationToken);
+            _logger.LogDebug("Data Entity {EntityId} cached for 15 minutes", id);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to cache Data Entity {EntityId}", id);
         }
 
         return entity;
@@ -258,6 +299,9 @@ public class DataEntityService : IDataEntityService
 
         await _context.SaveChangesAsync(cancellationToken);
 
+        // Invalidate cache
+        await InvalidateCacheAsync(id, cancellationToken);
+
         _logger.LogInformation("Data Entity {EntityId} updated by user {UserId}", entity.Id, userId);
 
         return await GetByIdAsync(entity.Id, cancellationToken);
@@ -299,9 +343,29 @@ public class DataEntityService : IDataEntityService
 
         await _context.SaveChangesAsync(cancellationToken);
 
+        // Invalidate cache
+        await InvalidateCacheAsync(id, cancellationToken);
+
         _logger.LogInformation("Data Entity {EntityId} soft deleted with {AttributeCount} attributes",
             entity.Id, entity.Attributes.Count);
 
         return true;
+    }
+
+    /// <summary>
+    /// Invalidate cache for a data entity
+    /// </summary>
+    private async Task InvalidateCacheAsync(Guid id, CancellationToken cancellationToken)
+    {
+        var cacheKey = $"dataentity:{id}";
+        try
+        {
+            await _cache.RemoveAsync(cacheKey, cancellationToken);
+            _logger.LogDebug("Cache invalidated for Data Entity {EntityId}", id);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to invalidate cache for Data Entity {EntityId}", id);
+        }
     }
 }

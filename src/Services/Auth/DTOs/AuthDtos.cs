@@ -71,3 +71,31 @@ public class ChangePasswordRequest
     public string NewPassword { get; set; } = string.Empty;
     public string ConfirmNewPassword { get; set; } = string.Empty;
 }
+
+/// <summary>
+/// Request for email confirmation
+/// </summary>
+public class ConfirmEmailRequest
+{
+    public Guid UserId { get; set; }
+    public string Token { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Response after generating email confirmation token
+/// </summary>
+public class EmailConfirmationTokenResponse
+{
+    public Guid UserId { get; set; }
+    public string Token { get; set; } = string.Empty;
+    public string Message { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Response after confirming email
+/// </summary>
+public class ConfirmEmailResponse
+{
+    public bool Success { get; set; }
+    public string Message { get; set; } = string.Empty;
+}

@@ -94,11 +94,11 @@ public class ResolveImpactAnalysisRequestValidator : AbstractValidator<ResolveIm
 }
 
 /// <summary>
-/// Validator for SimulateImpactRequest
+/// Validator for PreviewImpactRequest
 /// </summary>
-public class SimulateImpactRequestValidator : AbstractValidator<SimulateImpactRequest>
+public class PreviewImpactRequestValidator : AbstractValidator<PreviewImpactRequest>
 {
-    public SimulateImpactRequestValidator()
+    public PreviewImpactRequestValidator()
     {
         RuleFor(x => x)
             .Must(x => x.DataEntityId.HasValue || x.DataAttributeId.HasValue)
@@ -106,7 +106,7 @@ public class SimulateImpactRequestValidator : AbstractValidator<SimulateImpactRe
 
         RuleFor(x => x)
             .Must(x => !(x.DataEntityId.HasValue && x.DataAttributeId.HasValue))
-            .WithMessage("Cannot simulate impact for both Data Entity and Data Attribute simultaneously");
+            .WithMessage("Cannot preview impact for both Data Entity and Data Attribute simultaneously");
 
         RuleFor(x => x.ChangeType)
             .IsInEnum().WithMessage("Invalid change type");

@@ -16,7 +16,7 @@ public interface IImpactAnalysisService
     Task<ImpactAnalysisResponse> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
     Task<PagedResponse<ImpactAnalysisListItemResponse>> GetPagedAsync(ImpactAnalysisQueryParams queryParams, CancellationToken cancellationToken = default);
     Task<ImpactAnalysisResponse> ResolveAsync(Guid id, ResolveImpactAnalysisRequest request, Guid userId, CancellationToken cancellationToken = default);
-    Task<SimulatedImpactResponse> SimulateImpactAsync(SimulateImpactRequest request, CancellationToken cancellationToken = default);
+    Task<ImpactPreviewResponse> PreviewImpactAsync(PreviewImpactRequest request, CancellationToken cancellationToken = default);
     Task<ImpactAnalysisStatsResponse> GetStatsAsync(Guid? dictionaryId = null, CancellationToken cancellationToken = default);
 }
 
@@ -264,9 +264,10 @@ public class ImpactAnalysisService : IImpactAnalysisService
     }
 
     /// <summary>
-    /// Simulate impact without creating analysis
+    /// Preview impact without creating analysis (dry-run)
+    /// Performs real analysis but does not persist results to database
     /// </summary>
-    public async Task<SimulatedImpactResponse> SimulateImpactAsync(SimulateImpactRequest request, CancellationToken cancellationToken = default)
+    public async Task<ImpactPreviewResponse> PreviewImpactAsync(PreviewImpactRequest request, CancellationToken cancellationToken = default)
     {
         string targetName = string.Empty;
 
@@ -306,7 +307,7 @@ public class ImpactAnalysisService : IImpactAnalysisService
         // Generate recommendations
         var recommendations = GenerateRecommendations(affectedApis, request.ChangeType, riskLevel);
 
-        return new SimulatedImpactResponse
+        return new ImpactPreviewResponse
         {
             DataEntityId = request.DataEntityId,
             DataEntityName = request.DataEntityId.HasValue ? targetName : null,

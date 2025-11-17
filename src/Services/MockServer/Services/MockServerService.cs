@@ -390,44 +390,98 @@ public class MockServerService : IMockServerService
     }
 
     /// <summary>
-    /// Start Prism process (simulated implementation)
-    /// In production, this would execute: npx prism mock <spec-file> -p <port>
+    /// Start Prism process (production implementation)
+    /// Executes: npx @stoplight/prism-cli mock <spec-file> -p <port>
     /// </summary>
     private async Task<MockServerProcess> StartPrismProcessAsync(
         Apivia.Shared.Data.Entities.MockServer mockServer,
         string specPath)
     {
-        // Simulated Prism process
-        // In production, you would use Process.Start with Prism CLI:
-        // var processInfo = new ProcessStartInfo
-        // {
-        //     FileName = "npx",
-        //     Arguments = $"@stoplight/prism-cli mock {specPath} -p {mockServer.Port}",
-        //     UseShellExecute = false,
-        //     RedirectStandardOutput = true,
-        //     RedirectStandardError = true
-        // };
-        // var process = Process.Start(processInfo);
+        var processStartInfo = new ProcessStartInfo
+        {
+            FileName = "npx",
+            Arguments = $"@stoplight/prism-cli mock {specPath} -p {mockServer.Port}" +
+                        (mockServer.EnableCors ? " --cors" : "") +
+                        (mockServer.EnableDynamicExamples ? " --dynamic" : ""),
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+            WorkingDirectory = "/tmp"
+        };
 
-        var process = new MockServerProcess
+        var systemProcess = new Process { StartInfo = processStartInfo };
+
+        var mockServerProcess = new MockServerProcess
         {
             MockServerId = mockServer.Id,
             Port = mockServer.Port,
             SpecPath = specPath,
-            StartedAt = DateTime.UtcNow
+            StartedAt = DateTime.UtcNow,
+            SystemProcess = systemProcess
         };
 
-        // Add initial log entry
-        process.Logs.Add(new LogEntry
+        // Set up log capture from stdout/stderr
+        systemProcess.OutputDataReceived += (sender, e) =>
         {
-            Timestamp = DateTime.UtcNow,
-            Level = "INFO",
-            Message = $"Mock server started on port {mockServer.Port}",
-            Details = $"API Spec: {mockServer.ApiSpec.Name} v{mockServer.ApiSpec.Version}"
-        });
+            if (!string.IsNullOrEmpty(e.Data))
+            {
+                mockServerProcess.Logs.Add(new LogEntry
+                {
+                    Timestamp = DateTime.UtcNow,
+                    Level = "INFO",
+                    Message = e.Data
+                });
+                _logger.LogInformation("[Prism {MockServerId}] {Output}", mockServer.Id, e.Data);
+            }
+        };
+
+        systemProcess.ErrorDataReceived += (sender, e) =>
+        {
+            if (!string.IsNullOrEmpty(e.Data))
+            {
+                mockServerProcess.Logs.Add(new LogEntry
+                {
+                    Timestamp = DateTime.UtcNow,
+                    Level = "ERROR",
+                    Message = e.Data
+                });
+                _logger.LogError("[Prism {MockServerId}] {Error}", mockServer.Id, e.Data);
+            }
+        };
+
+        try
+        {
+            systemProcess.Start();
+            systemProcess.BeginOutputReadLine();
+            systemProcess.BeginErrorReadLine();
+
+            // Add initial log entry
+            mockServerProcess.Logs.Add(new LogEntry
+            {
+                Timestamp = DateTime.UtcNow,
+                Level = "INFO",
+                Message = $"Mock server started on port {mockServer.Port}",
+                Details = $"API Spec: {mockServer.ApiSpec.Name} v{mockServer.ApiSpec.Version}, PID: {systemProcess.Id}"
+            });
+
+            _logger.LogInformation("Started Prism mock server for {ApiSpecName} on port {Port}, PID: {ProcessId}",
+                mockServer.ApiSpec.Name, mockServer.Port, systemProcess.Id);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to start Prism process for mock server {MockServerId}", mockServer.Id);
+            mockServerProcess.Logs.Add(new LogEntry
+            {
+                Timestamp = DateTime.UtcNow,
+                Level = "ERROR",
+                Message = $"Failed to start Prism: {ex.Message}"
+            });
+            throw new InvalidOperationException($"Failed to start Prism mock server: {ex.Message}", ex);
+        }
 
         await Task.CompletedTask;
-        return process;
+        return mockServerProcess;
     }
 
     /// <summary>
@@ -435,16 +489,56 @@ public class MockServerService : IMockServerService
     /// </summary>
     private async Task StopPrismProcessAsync(MockServerProcess process)
     {
-        // In production, this would kill the actual process
-        // process.Kill();
-        // process.WaitForExit(5000);
-
-        process.Logs.Add(new LogEntry
+        if (process.SystemProcess != null && !process.SystemProcess.HasExited)
         {
-            Timestamp = DateTime.UtcNow,
-            Level = "INFO",
-            Message = "Mock server stopped"
-        });
+            try
+            {
+                _logger.LogInformation("Stopping Prism process {ProcessId} for mock server {MockServerId}",
+                    process.SystemProcess.Id, process.MockServerId);
+
+                // Try graceful shutdown first
+                process.SystemProcess.Kill(entireProcessTree: true);
+
+                // Wait up to 5 seconds for process to exit
+                if (!process.SystemProcess.WaitForExit(5000))
+                {
+                    _logger.LogWarning("Prism process {ProcessId} did not exit gracefully, forcing termination",
+                        process.SystemProcess.Id);
+                }
+
+                process.Logs.Add(new LogEntry
+                {
+                    Timestamp = DateTime.UtcNow,
+                    Level = "INFO",
+                    Message = "Mock server stopped successfully"
+                });
+
+                _logger.LogInformation("Successfully stopped Prism process for mock server {MockServerId}", process.MockServerId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error stopping Prism process for mock server {MockServerId}", process.MockServerId);
+                process.Logs.Add(new LogEntry
+                {
+                    Timestamp = DateTime.UtcNow,
+                    Level = "ERROR",
+                    Message = $"Error stopping Prism: {ex.Message}"
+                });
+            }
+            finally
+            {
+                process.SystemProcess?.Dispose();
+            }
+        }
+        else
+        {
+            process.Logs.Add(new LogEntry
+            {
+                Timestamp = DateTime.UtcNow,
+                Level = "WARN",
+                Message = "Mock server process was already stopped"
+            });
+        }
 
         await Task.CompletedTask;
     }
@@ -459,6 +553,7 @@ internal class MockServerProcess
     public int Port { get; set; }
     public string SpecPath { get; set; } = string.Empty;
     public DateTime StartedAt { get; set; }
+    public Process? SystemProcess { get; set; }
     public List<LogEntry> Logs { get; set; } = new();
     public ConcurrentDictionary<string, int> RequestsByEndpoint { get; set; } = new();
     public ConcurrentDictionary<string, int> RequestsByMethod { get; set; } = new();

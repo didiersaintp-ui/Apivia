@@ -3,6 +3,7 @@ using Apivia.Shared.Data;
 using Apivia.Shared.Data.Entities;
 using Microsoft.EntityFrameworkCore;
 using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using YamlDotNet.Serialization;
 
@@ -317,8 +318,8 @@ public class LintingService : ILintingService
     }
 
     /// <summary>
-    /// Run linting on content (simulated Spectral implementation)
-    /// In production, this would execute: spectral lint <file> --ruleset <ruleset>
+    /// Run linting on content using Spectral CLI (production implementation)
+    /// Executes: npx @stoplight/spectral-cli lint <file> --ruleset <ruleset> --format json
     /// </summary>
     private async Task<List<LintIssue>> RunLintingAsync(
         string content,
@@ -326,58 +327,137 @@ public class LintingService : ILintingService
         Ruleset? ruleset)
     {
         var issues = new List<LintIssue>();
+        string? specFilePath = null;
+        string? rulesetFilePath = null;
 
         try
         {
-            // Parse the content
-            dynamic? spec = null;
-            if (format == ApiSpecFormat.OpenApiYaml || format == ApiSpecFormat.AsyncApiYaml)
+            // Write spec content to temporary file
+            var fileExtension = format == ApiSpecFormat.OpenApiYaml || format == ApiSpecFormat.AsyncApiYaml ? ".yaml" : ".json";
+            specFilePath = Path.Combine(Path.GetTempPath(), $"spec_{Guid.NewGuid()}{fileExtension}");
+            await File.WriteAllTextAsync(specFilePath, content);
+
+            // Prepare Spectral arguments
+            var arguments = $"@stoplight/spectral-cli lint \"{specFilePath}\" --format json";
+
+            // Write custom ruleset to temporary file if provided
+            if (ruleset != null && !string.IsNullOrEmpty(ruleset.Rules))
             {
-                spec = _yamlDeserializer.Deserialize<dynamic>(content);
-            }
-            else
-            {
-                spec = JsonSerializer.Deserialize<dynamic>(content);
+                rulesetFilePath = Path.Combine(Path.GetTempPath(), $"ruleset_{Guid.NewGuid()}.yaml");
+                await File.WriteAllTextAsync(rulesetFilePath, ruleset.Rules);
+                arguments += $" --ruleset \"{rulesetFilePath}\"";
             }
 
-            if (spec == null)
+            // Execute Spectral
+            var processStartInfo = new ProcessStartInfo
             {
-                issues.Add(new LintIssue
+                FileName = "npx",
+                Arguments = arguments,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+                WorkingDirectory = Path.GetTempPath()
+            };
+
+            using var process = new Process { StartInfo = processStartInfo };
+            var outputBuilder = new StringBuilder();
+            var errorBuilder = new StringBuilder();
+
+            process.OutputDataReceived += (sender, e) =>
+            {
+                if (!string.IsNullOrEmpty(e.Data))
                 {
-                    Code = "parser-error",
-                    Message = "Failed to parse specification",
-                    Severity = LintSeverity.Error,
-                    Path = "$",
-                    Range = new LintIssueRange
-                    {
-                        Start = new LintPosition { Line = 1, Character = 0 },
-                        End = new LintPosition { Line = 1, Character = 0 }
-                    }
-                });
-                return issues;
+                    outputBuilder.AppendLine(e.Data);
+                }
+            };
+
+            process.ErrorDataReceived += (sender, e) =>
+            {
+                if (!string.IsNullOrEmpty(e.Data))
+                {
+                    errorBuilder.AppendLine(e.Data);
+                }
+            };
+
+            process.Start();
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
+
+            // Wait for process to complete (max 30 seconds)
+            if (!process.WaitForExit(30000))
+            {
+                process.Kill(true);
+                throw new TimeoutException("Spectral linting timed out after 30 seconds");
             }
 
-            // Run basic validation rules (simulated Spectral rules)
-            issues.AddRange(await ValidateBasicStructureAsync(content, format));
-            issues.AddRange(await ValidateOpenAPIRulesAsync(content, format));
+            var output = outputBuilder.ToString();
+            var errors = errorBuilder.ToString();
 
-            // In production, you would execute Spectral CLI:
-            // var processInfo = new ProcessStartInfo
-            // {
-            //     FileName = "npx",
-            //     Arguments = $"@stoplight/spectral-cli lint {specPath} --ruleset {rulesetPath} --format json",
-            //     UseShellExecute = false,
-            //     RedirectStandardOutput = true,
-            //     RedirectStandardError = true
-            // };
-            // var process = Process.Start(processInfo);
-            // var output = await process.StandardOutput.ReadToEndAsync();
-            // var spectralResults = JsonSerializer.Deserialize<List<SpectralIssue>>(output);
-            // Convert spectralResults to LintIssue format
+            // Log Spectral execution
+            _logger.LogInformation("Spectral exit code: {ExitCode}", process.ExitCode);
+            if (!string.IsNullOrEmpty(errors))
+            {
+                _logger.LogWarning("Spectral stderr: {Errors}", errors);
+            }
+
+            // Parse Spectral JSON output
+            if (!string.IsNullOrEmpty(output))
+            {
+                try
+                {
+                    var spectralIssues = JsonSerializer.Deserialize<List<SpectralIssue>>(output);
+                    if (spectralIssues != null)
+                    {
+                        foreach (var spectralIssue in spectralIssues)
+                        {
+                            issues.Add(new LintIssue
+                            {
+                                Code = spectralIssue.Code ?? "unknown",
+                                Message = spectralIssue.Message ?? "No message",
+                                Severity = ConvertSpectralSeverity(spectralIssue.Severity),
+                                Path = spectralIssue.Path != null ? string.Join(".", spectralIssue.Path) : "$",
+                                Range = spectralIssue.Range != null ? new LintIssueRange
+                                {
+                                    Start = new LintPosition
+                                    {
+                                        Line = spectralIssue.Range.Start?.Line ?? 0,
+                                        Character = spectralIssue.Range.Start?.Character ?? 0
+                                    },
+                                    End = new LintPosition
+                                    {
+                                        Line = spectralIssue.Range.End?.Line ?? 0,
+                                        Character = spectralIssue.Range.End?.Character ?? 0
+                                    }
+                                } : null
+                            });
+                        }
+
+                        _logger.LogInformation("Spectral found {IssueCount} issues", issues.Count);
+                    }
+                }
+                catch (JsonException ex)
+                {
+                    _logger.LogError(ex, "Failed to parse Spectral output: {Output}", output);
+                    issues.Add(new LintIssue
+                    {
+                        Code = "spectral-parse-error",
+                        Message = $"Failed to parse Spectral output: {ex.Message}",
+                        Severity = LintSeverity.Error,
+                        Path = "$"
+                    });
+                }
+            }
+
+            // If no issues found and process exited successfully, the spec is valid
+            if (issues.Count == 0 && process.ExitCode == 0)
+            {
+                _logger.LogInformation("Spectral validation passed with no issues");
+            }
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error during linting");
+            _logger.LogError(ex, "Error during Spectral linting");
             issues.Add(new LintIssue
             {
                 Code = "linting-error",
@@ -386,99 +466,73 @@ public class LintingService : ILintingService
                 Path = "$"
             });
         }
+        finally
+        {
+            // Clean up temporary files
+            try
+            {
+                if (specFilePath != null && File.Exists(specFilePath))
+                {
+                    File.Delete(specFilePath);
+                }
+                if (rulesetFilePath != null && File.Exists(rulesetFilePath))
+                {
+                    File.Delete(rulesetFilePath);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to clean up temporary files");
+            }
+        }
 
         return issues;
     }
 
     /// <summary>
-    /// Validate basic structure (simulated rules)
+    /// Convert Spectral severity (0=error, 1=warn, 2=info, 3=hint) to LintSeverity
     /// </summary>
-    private async Task<List<LintIssue>> ValidateBasicStructureAsync(string content, ApiSpecFormat format)
+    private LintSeverity ConvertSpectralSeverity(int severity)
     {
-        var issues = new List<LintIssue>();
-
-        // Check for required fields
-        if (!content.Contains("openapi") && !content.Contains("swagger"))
+        return severity switch
         {
-            issues.Add(new LintIssue
-            {
-                Code = "openapi-tags-alphabetical",
-                Message = "OpenAPI object must have 'openapi' or 'swagger' field",
-                Severity = LintSeverity.Error,
-                Path = "$"
-            });
-        }
-
-        if (!content.Contains("info"))
-        {
-            issues.Add(new LintIssue
-            {
-                Code = "info-required",
-                Message = "Info object is required",
-                Severity = LintSeverity.Error,
-                Path = "$"
-            });
-        }
-
-        if (!content.Contains("paths"))
-        {
-            issues.Add(new LintIssue
-            {
-                Code = "paths-required",
-                Message = "Paths object is required",
-                Severity = LintSeverity.Error,
-                Path = "$"
-            });
-        }
-
-        await Task.CompletedTask;
-        return issues;
+            0 => LintSeverity.Error,
+            1 => LintSeverity.Warning,
+            2 => LintSeverity.Info,
+            3 => LintSeverity.Hint,
+            _ => LintSeverity.Info
+        };
     }
 
-    /// <summary>
-    /// Validate OpenAPI specific rules (simulated)
-    /// </summary>
-    private async Task<List<LintIssue>> ValidateOpenAPIRulesAsync(string content, ApiSpecFormat format)
-    {
-        var issues = new List<LintIssue>();
+}
 
-        // Check for description
-        if (!content.Contains("description"))
-        {
-            issues.Add(new LintIssue
-            {
-                Code = "info-description",
-                Message = "Info object should contain description",
-                Severity = LintSeverity.Warning,
-                Path = "$.info"
-            });
-        }
+/// <summary>
+/// Spectral issue output format
+/// </summary>
+internal class SpectralIssue
+{
+    public string? Code { get; set; }
+    public string? Message { get; set; }
+    public int Severity { get; set; } // 0=error, 1=warn, 2=info, 3=hint
+    public List<string>? Path { get; set; }
+    public SpectralRange? Range { get; set; }
+    public string? Source { get; set; }
+}
 
-        // Check for contact info
-        if (!content.Contains("contact"))
-        {
-            issues.Add(new LintIssue
-            {
-                Code = "info-contact",
-                Message = "Info object should contain contact information",
-                Severity = LintSeverity.Info,
-                Path = "$.info"
-            });
-        }
+/// <summary>
+/// Spectral range format
+/// </summary>
+internal class SpectralRange
+{
+    public SpectralPosition? Start { get; set; }
+    public SpectralPosition? End { get; set; }
+}
 
-        // Check for license
-        if (!content.Contains("license"))
-        {
-            issues.Add(new LintIssue
-            {
-                Code = "info-license",
-                Message = "Info object should contain license information",
-                Severity = LintSeverity.Info,
-                Path = "$.info"
-            });
-        }
-
-        await Task.CompletedTask;
-        return issues;
-    }
+/// <summary>
+/// Spectral position format
+/// </summary>
+internal class SpectralPosition
+{
+    public int Line { get; set; }
+    public int Character { get; set; }
 }

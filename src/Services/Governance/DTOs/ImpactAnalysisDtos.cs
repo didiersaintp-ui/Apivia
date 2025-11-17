@@ -96,9 +96,9 @@ public class ResolveImpactAnalysisRequest
 }
 
 /// <summary>
-/// Request to simulate impact before creating analysis
+/// Request to preview impact before creating analysis (dry-run)
 /// </summary>
-public class SimulateImpactRequest
+public class PreviewImpactRequest
 {
     public Guid? DataEntityId { get; set; }
     public Guid? DataAttributeId { get; set; }
@@ -106,9 +106,9 @@ public class SimulateImpactRequest
 }
 
 /// <summary>
-/// Response with simulated impact
+/// Response with impact preview (dry-run analysis without persistence)
 /// </summary>
-public class SimulatedImpactResponse
+public class ImpactPreviewResponse
 {
     public Guid? DataEntityId { get; set; }
     public string? DataEntityName { get; set; }

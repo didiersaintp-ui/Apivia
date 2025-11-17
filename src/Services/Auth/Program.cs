@@ -61,6 +61,14 @@ builder.Services.AddSwaggerGen(c =>
 builder.Services.AddDbContext<ApiviaDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
 
+// Add Redis for distributed caching
+var redisConnection = builder.Configuration.GetConnectionString("Redis") ?? "redis:6379";
+builder.Services.AddStackExchangeRedisCache(options =>
+{
+    options.Configuration = redisConnection;
+    options.InstanceName = "Apivia:Auth:";
+});
+
 // Add Identity
 builder.Services.AddIdentity<User, IdentityRole<Guid>>(options =>
 {

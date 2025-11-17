@@ -181,36 +181,37 @@ public class ImpactAnalysisController : ControllerBase
     }
 
     /// <summary>
-    /// Simulate impact without creating analysis
+    /// Preview impact without creating analysis (dry-run)
+    /// Performs real analysis but does not persist results to database
     /// </summary>
-    [HttpPost("simulate")]
-    [ProducesResponseType(typeof(SimulatedImpactResponse), StatusCodes.Status200OK)]
+    [HttpPost("preview")]
+    [ProducesResponseType(typeof(ImpactPreviewResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
-    public async Task<ActionResult<SimulatedImpactResponse>> SimulateImpact(
-        [FromBody] SimulateImpactRequest request,
+    public async Task<ActionResult<ImpactPreviewResponse>> PreviewImpact(
+        [FromBody] PreviewImpactRequest request,
         CancellationToken cancellationToken)
     {
         try
         {
-            var result = await _impactAnalysisService.SimulateImpactAsync(request, cancellationToken);
+            var result = await _impactAnalysisService.PreviewImpactAsync(request, cancellationToken);
             return Ok(result);
         }
         catch (InvalidOperationException ex)
         {
-            _logger.LogWarning(ex, "Failed to simulate impact");
+            _logger.LogWarning(ex, "Failed to preview impact");
             return BadRequest(new ProblemDetails
             {
-                Title = "Simulation Failed",
+                Title = "Preview Failed",
                 Detail = ex.Message,
                 Status = StatusCodes.Status400BadRequest
             });
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error simulating impact");
+            _logger.LogError(ex, "Error previewing impact");
             return StatusCode(500, new ProblemDetails
             {
-                Title = "Error simulating impact",
+                Title = "Error previewing impact",
                 Detail = ex.Message,
                 Status = StatusCodes.Status500InternalServerError
             });

@@ -3,6 +3,8 @@ using Apivia.Shared.Data;
 using Apivia.Shared.Data.Entities;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Distributed;
+using System.Text.Json;
 
 namespace Apivia.Services.Auth.Services;
 
@@ -26,20 +28,20 @@ public class AuthService : IAuthService
     private readonly ApiviaDbContext _context;
     private readonly IJwtTokenService _jwtTokenService;
     private readonly ILogger<AuthService> _logger;
-
-    // In-memory storage for refresh tokens (in production, use Redis or database)
-    private static readonly Dictionary<string, (Guid UserId, DateTime ExpiresAt)> _refreshTokens = new();
+    private readonly IDistributedCache _cache;
 
     public AuthService(
         UserManager<User> userManager,
         ApiviaDbContext context,
         IJwtTokenService jwtTokenService,
-        ILogger<AuthService> logger)
+        ILogger<AuthService> logger,
+        IDistributedCache cache)
     {
         _userManager = userManager;
         _context = context;
         _jwtTokenService = jwtTokenService;
         _logger = logger;
+        _cache = cache;
     }
 
     /// <summary>
@@ -118,9 +120,24 @@ public class AuthService : IAuthService
         var accessToken = _jwtTokenService.GenerateAccessToken(user);
         var refreshToken = _jwtTokenService.GenerateRefreshToken();
 
-        // Store refresh token (in production, store in Redis or database with expiration)
-        var refreshTokenExpiry = DateTime.UtcNow.AddDays(7); // 7 days refresh token validity
-        _refreshTokens[refreshToken] = (user.Id, refreshTokenExpiry);
+        // Store refresh token in Redis with 7 days expiration
+        var refreshTokenExpiry = DateTime.UtcNow.AddDays(7);
+        var tokenData = new RefreshTokenData
+        {
+            UserId = user.Id,
+            ExpiresAt = refreshTokenExpiry
+        };
+
+        var options = new DistributedCacheEntryOptions
+        {
+            AbsoluteExpiration = refreshTokenExpiry
+        };
+
+        await _cache.SetStringAsync(
+            $"refresh_token:{refreshToken}",
+            JsonSerializer.Serialize(tokenData),
+            options,
+            cancellationToken);
 
         _logger.LogInformation("User {UserId} logged in successfully", user.Id);
 
@@ -142,17 +159,35 @@ public class AuthService : IAuthService
     /// </summary>
     public async Task<RefreshTokenResponse> RefreshTokenAsync(RefreshTokenRequest request, CancellationToken cancellationToken = default)
     {
-        // Validate refresh token
-        if (!_refreshTokens.TryGetValue(request.RefreshToken, out var tokenData))
+        // Validate refresh token from Redis
+        var cachedData = await _cache.GetStringAsync($"refresh_token:{request.RefreshToken}", cancellationToken);
+        if (string.IsNullOrEmpty(cachedData))
         {
             _logger.LogWarning("Invalid refresh token attempt");
             throw new UnauthorizedAccessException("Invalid refresh token");
         }
 
-        // Check if token is expired
+        RefreshTokenData? tokenData;
+        try
+        {
+            tokenData = JsonSerializer.Deserialize<RefreshTokenData>(cachedData);
+        }
+        catch (JsonException)
+        {
+            _logger.LogError("Failed to deserialize refresh token data");
+            throw new UnauthorizedAccessException("Invalid refresh token");
+        }
+
+        if (tokenData == null)
+        {
+            _logger.LogError("Refresh token data is null");
+            throw new UnauthorizedAccessException("Invalid refresh token");
+        }
+
+        // Check if token is expired (Redis should auto-expire, but double-check)
         if (tokenData.ExpiresAt < DateTime.UtcNow)
         {
-            _refreshTokens.Remove(request.RefreshToken);
+            await _cache.RemoveAsync($"refresh_token:{request.RefreshToken}", cancellationToken);
             _logger.LogWarning("Expired refresh token for user: {UserId}", tokenData.UserId);
             throw new UnauthorizedAccessException("Refresh token expired");
         }
@@ -169,10 +204,27 @@ public class AuthService : IAuthService
         var newAccessToken = _jwtTokenService.GenerateAccessToken(user);
         var newRefreshToken = _jwtTokenService.GenerateRefreshToken();
 
-        // Remove old refresh token and store new one
-        _refreshTokens.Remove(request.RefreshToken);
+        // Remove old refresh token from Redis
+        await _cache.RemoveAsync($"refresh_token:{request.RefreshToken}", cancellationToken);
+
+        // Store new refresh token in Redis
         var newRefreshTokenExpiry = DateTime.UtcNow.AddDays(7);
-        _refreshTokens[newRefreshToken] = (user.Id, newRefreshTokenExpiry);
+        var newTokenData = new RefreshTokenData
+        {
+            UserId = user.Id,
+            ExpiresAt = newRefreshTokenExpiry
+        };
+
+        var options = new DistributedCacheEntryOptions
+        {
+            AbsoluteExpiration = newRefreshTokenExpiry
+        };
+
+        await _cache.SetStringAsync(
+            $"refresh_token:{newRefreshToken}",
+            JsonSerializer.Serialize(newTokenData),
+            options,
+            cancellationToken);
 
         _logger.LogInformation("Token refreshed for user {UserId}", user.Id);
 
@@ -208,4 +260,13 @@ public class AuthService : IAuthService
 
         return true;
     }
+}
+
+/// <summary>
+/// Internal class for refresh token data storage in Redis
+/// </summary>
+internal class RefreshTokenData
+{
+    public Guid UserId { get; set; }
+    public DateTime ExpiresAt { get; set; }
 }
